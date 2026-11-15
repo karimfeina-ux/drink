@@ -1,0 +1,6 @@
+{
+  "name": "AETHERIA — Botanical Electrolyte Hydration",
+  "description": "Scroll-driven cinematic storefront for Aetheria, six small-batch mineral hydration elixirs crafted with crisp spring electrolytes and adaptogenic botanicals.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
