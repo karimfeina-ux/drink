@@ -6,7 +6,7 @@ import { CinematicScenes } from './components/CinematicScenes';
 import { ElixirDock } from './components/ElixirDock';
 import { Navbar } from './components/Navbar';
 import { ProductLandingPage, type PackSize } from './components/ProductLandingPage';
-import { ScrubbedVideoCanvas } from './components/ScrubbedVideoCanvas';
+import { ScrubbedVideoCanvas, type VideoTickFn } from './components/ScrubbedVideoCanvas';
 import {
   ELIXIRS,
   getActiveFeaturedElixir,
@@ -21,7 +21,6 @@ function parseProductFromHash(): ElixirProduct | null {
 }
 
 export default function App() {
-  const [scrollPercent, setScrollPercent] = useState(0);
   const [dockReady, setDockReady] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
   const [selectedElixir, setSelectedElixir] = useState<ElixirProduct>(ELIXIRS[4]);
@@ -34,6 +33,10 @@ export default function App() {
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
 
   const scrollProgressRef = useRef(0);
+  const videoTickRef = useRef<VideoTickFn | null>(null);
+  const filmPercentRef = useRef<HTMLSpanElement | null>(null);
+  const lastPctRef = useRef(-1);
+  const lastWindowIdRef = useRef(ELIXIRS[4].id);
   const lenisRef = useRef<Lenis | null>(null);
   const savedScrollYRef = useRef(0);
 
@@ -60,7 +63,7 @@ export default function App() {
     return () => mq.removeEventListener('change', handler);
   }, []);
 
-  // Initialize Lenis smooth inertia scroll + normalized scroll progress tracking
+  // Single unified rAF loop + Lenis + visibility pause (zero per-frame React state updates)
   useEffect(() => {
     if (routedProduct) {
       lenisRef.current?.destroy();
@@ -68,34 +71,50 @@ export default function App() {
       return;
     }
 
-    const updateScroll = () => {
-      const maxScroll = Math.max(
+    let maxScroll = Math.max(
+      1,
+      document.documentElement.scrollHeight - window.innerHeight
+    );
+
+    const recomputeBounds = () => {
+      maxScroll = Math.max(
         1,
         document.documentElement.scrollHeight - window.innerHeight
       );
+    };
+
+    const syncScrollMetrics = () => {
       const nextProgress = Math.max(0, Math.min(1, window.scrollY / maxScroll));
       scrollProgressRef.current = nextProgress;
 
       const nextPct = Math.round(nextProgress * 100);
-      setScrollPercent((prev) => (prev === nextPct ? prev : nextPct));
+      if (nextPct !== lastPctRef.current) {
+        lastPctRef.current = nextPct;
+        if (filmPercentRef.current) {
+          filmPercentRef.current.textContent = `Film ${nextPct.toString().padStart(2, '0')}%`;
+        }
+      }
 
       const shouldShowDock = nextProgress >= 0.62;
       setDockReady((prev) => (prev === shouldShowDock ? prev : shouldShowDock));
 
       if (!hasManualSelection) {
         const featured = getActiveFeaturedElixir(nextProgress);
-        setSelectedElixir((prev) => (prev.id === featured.id ? prev : featured));
+        if (featured.id !== lastWindowIdRef.current) {
+          lastWindowIdRef.current = featured.id;
+          setSelectedElixir(featured);
+        }
       }
     };
 
-    updateScroll();
+    syncScrollMetrics();
 
     if (reducedMotion) {
-      window.addEventListener('scroll', updateScroll, { passive: true });
-      window.addEventListener('resize', updateScroll, { passive: true });
+      window.addEventListener('scroll', syncScrollMetrics, { passive: true });
+      window.addEventListener('resize', recomputeBounds, { passive: true });
       return () => {
-        window.removeEventListener('scroll', updateScroll);
-        window.removeEventListener('resize', updateScroll);
+        window.removeEventListener('scroll', syncScrollMetrics);
+        window.removeEventListener('resize', recomputeBounds);
       };
     }
 
@@ -106,20 +125,50 @@ export default function App() {
       touchMultiplier: 1.35,
     });
     lenisRef.current = lenis;
+    lenis.on('scroll', syncScrollMetrics);
 
     let rafId = 0;
-    const raf = (time: number) => {
-      lenis.raf(time);
-      rafId = requestAnimationFrame(raf);
-    };
-    rafId = requestAnimationFrame(raf);
+    let lastNow = performance.now();
 
-    lenis.on('scroll', updateScroll);
-    window.addEventListener('resize', updateScroll, { passive: true });
+    const frame = (now: number) => {
+      if (document.hidden) {
+        rafId = 0;
+        return;
+      }
+      const dt = Math.min(0.05, Math.max(0.001, (now - lastNow) / 1000));
+      lastNow = now;
+
+      lenis.raf(now);
+      videoTickRef.current?.(now, dt);
+
+      rafId = requestAnimationFrame(frame);
+    };
+
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        if (rafId) {
+          cancelAnimationFrame(rafId);
+          rafId = 0;
+        }
+      } else {
+        lastNow = performance.now();
+        if (!rafId) {
+          rafId = requestAnimationFrame(frame);
+        }
+      }
+    };
+
+    if (!document.hidden) {
+      rafId = requestAnimationFrame(frame);
+    }
+
+    window.addEventListener('resize', recomputeBounds, { passive: true });
+    document.addEventListener('visibilitychange', onVisibilityChange);
 
     return () => {
-      cancelAnimationFrame(rafId);
-      window.removeEventListener('resize', updateScroll);
+      if (rafId) cancelAnimationFrame(rafId);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('resize', recomputeBounds);
       lenis.destroy();
       lenisRef.current = null;
     };
@@ -226,7 +275,6 @@ export default function App() {
 
   const totalBagCount = cartItems.reduce((sum, item) => sum + item.quantity, 0);
 
-  // Reveal bottle selector dock once the scroll arrives at the live orbital lineup stage
   const dockVisible = !cartOpen && dockReady;
 
   return (
@@ -250,11 +298,12 @@ export default function App() {
         <>
           <ScrubbedVideoCanvas
             scrollProgressRef={scrollProgressRef}
+            videoTickRef={videoTickRef}
             reducedMotion={reducedMotion}
           />
 
           <CinematicScenes
-            scrollPercent={scrollPercent}
+            filmPercentRef={filmPercentRef}
             selectedElixir={selectedElixir}
             onSelectElixir={handleSelectElixir}
             onOpenProduct={handleOpenProductPage}

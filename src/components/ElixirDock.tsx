@@ -29,7 +29,7 @@ export function ElixirDock({
           transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
           className="fixed bottom-4 sm:bottom-6 inset-x-0 z-30 flex justify-center px-3 sm:px-6 pointer-events-none"
         >
-          <div className="pointer-events-auto flex items-center gap-1.5 sm:gap-2 p-1.5 bg-[#0A0810]/88 backdrop-blur-xl border border-[#F3F1EC]/18 max-w-full overflow-x-auto no-scrollbar shadow-2xl">
+          <div className="pointer-events-auto flex items-center gap-1.5 sm:gap-2 p-1.5 bg-[#0A0810]/96 border border-[#F3F1EC]/18 max-w-full overflow-x-auto no-scrollbar shadow-2xl">
             <div
               className="flex items-center gap-1 shrink-0"
               role="tablist"

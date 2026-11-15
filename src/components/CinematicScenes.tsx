@@ -1,11 +1,11 @@
 import { ArrowDown, ArrowUpRight, CheckCircle2, Plus } from 'lucide-react';
 import { motion } from 'motion/react';
-import { useState, type FormEvent } from 'react';
+import { type FormEvent, type RefObject, useState } from 'react';
 import { BRAND_CONFIG, ELIXIRS, type ElixirProduct } from '../data/elixirs';
 import type { PackSize } from './ProductLandingPage';
 
 interface CinematicScenesProps {
-  scrollPercent: number;
+  filmPercentRef: RefObject<HTMLSpanElement | null>;
   selectedElixir: ElixirProduct;
   onSelectElixir: (elixir: ElixirProduct) => void;
   onOpenProduct: (elixir: ElixirProduct) => void;
@@ -21,7 +21,7 @@ const RITUAL_SCHEDULE = [
 ];
 
 export function CinematicScenes({
-  scrollPercent,
+  filmPercentRef,
   selectedElixir,
   onSelectElixir,
   onOpenProduct,
@@ -63,8 +63,8 @@ export function CinematicScenes({
             <span aria-hidden="true">·</span>
             <span>Zero Sugar</span>
           </div>
-          <span className="tabular-nums hidden sm:inline">
-            Film {scrollPercent.toString().padStart(2, '0')}%
+          <span ref={filmPercentRef} className="tabular-nums hidden sm:inline">
+            Film 00%
           </span>
         </motion.div>
 
@@ -209,7 +209,7 @@ export function CinematicScenes({
               Precision electrolyte geometry.
             </h2>
 
-            <div className="mt-7 divide-y divide-[#F3F1EC]/18 border-y border-[#F3F1EC]/18 backdrop-blur-[2px]">
+            <div className="mt-7 divide-y divide-[#F3F1EC]/18 border-y border-[#F3F1EC]/18">
               <div className="py-3.5 flex items-baseline justify-between text-sm">
                 <span className="text-[#F3F1EC]/80">Ionic Sodium Range</span>
                 <span className="font-mono tabular-nums text-[#F3F1EC]">360 – 540 mg</span>

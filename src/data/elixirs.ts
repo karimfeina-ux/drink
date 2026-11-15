@@ -47,10 +47,18 @@ export const BRAND_CONFIG = {
   freeShippingThreshold: 75,
 } as const;
 
-export const CINEMA_VIDEO = {
-  src: '/assets/hydration/cinema-master.mp4',
-  poster: '/assets/hydration/poster.jpg',
+export const CINEMA_TIERS = {
+  fps: 24,
+  totalFrames: 480,
   durationSec: 20.0,
+  desktop: {
+    src: '/assets/hydration/cinema-desktop.mp4',
+    poster: '/assets/hydration/poster-desktop.jpg',
+  },
+  mobile: {
+    src: '/assets/hydration/cinema-mobile.mp4',
+    poster: '/assets/hydration/poster-mobile.jpg',
+  },
 } as const;
 
 export const ELIXIRS: ElixirProduct[] = [

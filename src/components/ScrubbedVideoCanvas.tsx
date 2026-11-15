@@ -1,41 +1,78 @@
 import { type MutableRefObject, useEffect, useRef, useState } from 'react';
-import { CINEMA_VIDEO } from '../data/elixirs';
+import { CINEMA_TIERS } from '../data/elixirs';
+
+export type VideoTickFn = (now: number, dt: number) => void;
 
 interface ScrubbedVideoCanvasProps {
   scrollProgressRef: MutableRefObject<number>;
+  videoTickRef: MutableRefObject<VideoTickFn | null>;
   reducedMotion: boolean;
 }
 
+interface NavigatorWithConnection extends Navigator {
+  connection?: {
+    saveData?: boolean;
+  };
+}
+
+function selectInitialTier() {
+  if (typeof window === 'undefined') return CINEMA_TIERS.desktop;
+  const isPortrait =
+    window.matchMedia('(orientation: portrait)').matches ||
+    window.innerHeight > window.innerWidth;
+  const isCoarseSmall =
+    window.matchMedia('(pointer: coarse)').matches && window.innerWidth <= 900;
+  return isPortrait || isCoarseSmall ? CINEMA_TIERS.mobile : CINEMA_TIERS.desktop;
+}
+
+function isSaveDataEnabled() {
+  if (typeof navigator === 'undefined') return false;
+  return Boolean((navigator as NavigatorWithConnection).connection?.saveData);
+}
+
 /**
- * Full-viewport scrubbed cinema master with:
- * - In-memory Blob preloading (eliminates HTTP 206 range-request stalls while scrubbing)
- * - Direct DOM transform + rAF lockstep with Lenis (no React re-renders or double-smoothing lag)
- * - Seeked-chained pipelining for instant forward & backward frame scrubbing
+ * Full-viewport scrubbed video backdrop:
+ * - Picks mobile portrait (1080x1920) or desktop QHD (2560x1440) tier strictly once on mount
+ * - Honors Save-Data & prefers-reduced-motion (poster only, zero video download)
+ * - Preloads All-Intra MP4 into an in-memory Blob URL with fallback & full cleanup
+ * - Driven by the single unified rAF loop via videoTickRef with dt-normalized smoothing
+ *   and exact frame quantization ((frame + 0.25) / fps)
  */
 export function ScrubbedVideoCanvas({
   scrollProgressRef,
+  videoTickRef,
   reducedMotion,
 }: ScrubbedVideoCanvasProps) {
+  const [tier] = useState(selectInitialTier);
+  const [saveData] = useState(isSaveDataEnabled);
+  const posterOnly = reducedMotion || saveData;
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const posterRef = useRef<HTMLImageElement | null>(null);
-  const desiredTimeRef = useRef(0);
+
   const smoothedScrubRef = useRef(0);
+  const lastRequestedFrameRef = useRef(-1);
+  const desiredFrameRef = useRef(0);
+  const lastTransformRef = useRef('');
   const unlockedRef = useRef(false);
 
   const [blobSrc, setBlobSrc] = useState<string | null>(null);
   const [videoReady, setVideoReady] = useState(false);
   const [videoFailed, setVideoFailed] = useState(false);
 
-  // Preload cinema-master.mp4 once into an in-memory Blob URL so every scroll seek is local RAM
+  // Preload active video tier once into an in-memory Blob URL for zero-network scrubbing
   useEffect(() => {
-    if (reducedMotion) return;
+    if (posterOnly) {
+      setBlobSrc(null);
+      return;
+    }
 
     const controller = new AbortController();
     let objectUrl: string | null = null;
 
-    fetch(CINEMA_VIDEO.src, { signal: controller.signal })
+    fetch(tier.src, { signal: controller.signal })
       .then((res) => {
-        if (!res.ok) throw new Error('Video fetch failed');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.blob();
       })
       .then((blob) => {
@@ -44,8 +81,7 @@ export function ScrubbedVideoCanvas({
       })
       .catch((err) => {
         if (err?.name !== 'AbortError') {
-          // Graceful fallback to direct URL streaming if Blob preload fails
-          setBlobSrc(CINEMA_VIDEO.src);
+          setBlobSrc(tier.src);
         }
       });
 
@@ -55,10 +91,11 @@ export function ScrubbedVideoCanvas({
         URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [reducedMotion]);
+  }, [posterOnly, tier]);
 
-  // Mobile Safari silent playback unlock on first gesture
+  // iOS Safari silent playback unlock on first user interaction
   useEffect(() => {
+    if (posterOnly) return;
     const unlock = () => {
       if (unlockedRef.current) return;
       const vid = videoRef.current;
@@ -80,99 +117,109 @@ export function ScrubbedVideoCanvas({
       window.removeEventListener('touchstart', unlock);
       window.removeEventListener('pointerdown', unlock);
     };
-  }, []);
+  }, [posterOnly]);
 
-  // 120Hz rAF lockstep sync + immediate seeked-pipelining
+  // Register frame-quantized tick callback with App's single unified rAF loop
   useEffect(() => {
-    if (reducedMotion || videoFailed || !blobSrc) return;
+    if (posterOnly || videoFailed || !blobSrc) {
+      videoTickRef.current = null;
+      return;
+    }
 
-    let rafId = 0;
-    const seekThreshold = 0.008; // Sub-frame precision
+    const { fps, totalFrames } = CINEMA_TIERS;
 
-    const dispatchSeek = (vid: HTMLVideoElement, targetTime: number) => {
-      if (vid.seeking) return;
-      if (Math.abs(vid.currentTime - targetTime) > seekThreshold) {
-        try {
-          vid.currentTime = targetTime;
-        } catch {
-          // Ignore transient decode state while loading metadata
-        }
-      }
-    };
-
-    const tick = () => {
-      const vid = videoRef.current;
+    videoTickRef.current = (_now: number, dt: number) => {
       const clampedProgress = Math.max(0, Math.min(1, scrollProgressRef.current));
-      // Map [0..0.76] scroll across 0..100% of the 20s film so Scene 05 locks on the final 6-can lineup
       const mappedVideoProgress = Math.min(1, clampedProgress / 0.76);
 
-      // Tight 0.55 catchup removes any staircase micro-jitter while staying 1:1 responsive with Lenis
-      smoothedScrubRef.current += (mappedVideoProgress - smoothedScrubRef.current) * 0.55;
-      if (Math.abs(mappedVideoProgress - smoothedScrubRef.current) < 0.0004) {
+      // Frame-rate independent exponential smoothing (identical feel at 60/120/144 Hz)
+      const k = 1 - Math.exp(-dt * 30);
+      smoothedScrubRef.current += (mappedVideoProgress - smoothedScrubRef.current) * k;
+      if (Math.abs(mappedVideoProgress - smoothedScrubRef.current) < 0.00025) {
         smoothedScrubRef.current = mappedVideoProgress;
       }
 
-      const scale = 1.03 - Math.min(clampedProgress, 1) * 0.03;
-      const scaleTransform = `scale(${scale.toFixed(5)}) translate3d(0, 0, 0)`;
+      // Transform ends at exact scale(1) at final frame so video renders pixel-native
+      const rawScale = 1.03 - mappedVideoProgress * 0.03;
+      const nextTransform =
+        rawScale <= 1.0001
+          ? 'scale(1) translate3d(0, 0, 0)'
+          : `scale(${rawScale.toFixed(5)}) translate3d(0, 0, 0)`;
 
+      const vid = videoRef.current;
       if (vid) {
-        vid.style.transform = scaleTransform;
-        if (vid.readyState >= 1 && Number.isFinite(vid.duration) && vid.duration > 0) {
-          const targetTime = Math.max(
-            0,
-            Math.min(vid.duration - 0.02, smoothedScrubRef.current * vid.duration)
-          );
-          desiredTimeRef.current = targetTime;
-          dispatchSeek(vid, targetTime);
+        if (lastTransformRef.current !== nextTransform) {
+          lastTransformRef.current = nextTransform;
+          vid.style.transform = nextTransform;
         }
-      } else if (posterRef.current) {
-        posterRef.current.style.transform = scaleTransform;
+
+        if (vid.readyState >= 1) {
+          const frame = Math.max(
+            0,
+            Math.min(totalFrames - 1, Math.round(smoothedScrubRef.current * (totalFrames - 1)))
+          );
+          desiredFrameRef.current = frame;
+
+          if (frame !== lastRequestedFrameRef.current && !vid.seeking) {
+            lastRequestedFrameRef.current = frame;
+            try {
+              vid.currentTime = (frame + 0.25) / fps;
+            } catch {
+              // Ignore transient seek state during initial decode
+            }
+          }
+        }
+      } else if (posterRef.current && lastTransformRef.current !== nextTransform) {
+        lastTransformRef.current = nextTransform;
+        posterRef.current.style.transform = nextTransform;
       }
-
-      rafId = requestAnimationFrame(tick);
     };
 
-    rafId = requestAnimationFrame(tick);
     return () => {
-      cancelAnimationFrame(rafId);
+      videoTickRef.current = null;
     };
-  }, [reducedMotion, videoFailed, blobSrc, scrollProgressRef]);
+  }, [posterOnly, videoFailed, blobSrc, scrollProgressRef, videoTickRef]);
 
   return (
     <div className="fixed inset-0 z-0 overflow-hidden bg-[#07060B]" aria-hidden="true">
-      {/* Instant Poster / Reduced Motion / Fallback */}
+      {/* Immediate Poster Layer — zero CSS filters */}
       <img
         ref={posterRef}
-        src={CINEMA_VIDEO.poster}
-        alt="Aetheria botanical electrolyte cans in suspended cosmic light"
-        className={`absolute inset-0 w-full h-full object-cover brightness-[1.06] contrast-[1.03] transition-opacity duration-500 ${
-          videoReady && !reducedMotion && !videoFailed ? 'opacity-0' : 'opacity-100'
-        }`}
+        src={tier.poster}
+        alt="Aetheria botanical electrolyte cans suspended in light"
+        fetchPriority="high"
+        loading="eager"
+        decoding="async"
+        className="absolute inset-0 w-full h-full object-cover"
         style={{ willChange: 'transform' }}
       />
 
-      {/* In-Memory Blob Mastered QHD Video */}
-      {!reducedMotion && !videoFailed && blobSrc && (
+      {/* All-Intra Scrubbed Tier Layer — fades cleanly over poster when ready */}
+      {!posterOnly && !videoFailed && blobSrc && (
         <video
           ref={videoRef}
           src={blobSrc}
-          poster={CINEMA_VIDEO.poster}
+          poster={tier.poster}
           muted
           playsInline
           preload="auto"
           disablePictureInPicture
+          disableRemotePlayback
           onLoadedMetadata={(e) => {
             const vid = e.currentTarget;
             const mapped = Math.min(1, Math.max(0, scrollProgressRef.current) / 0.76);
-            if (Number.isFinite(vid.duration) && vid.duration > 0) {
-              const initialTime = Math.min(vid.duration - 0.02, mapped * vid.duration);
-              desiredTimeRef.current = initialTime;
-              smoothedScrubRef.current = mapped;
-              try {
-                vid.currentTime = initialTime;
-              } catch {
-                // Ignore initial seek edge case
-              }
+            const { fps, totalFrames } = CINEMA_TIERS;
+            const frame = Math.max(
+              0,
+              Math.min(totalFrames - 1, Math.round(mapped * (totalFrames - 1)))
+            );
+            smoothedScrubRef.current = mapped;
+            desiredFrameRef.current = frame;
+            lastRequestedFrameRef.current = frame;
+            try {
+              vid.currentTime = (frame + 0.25) / fps;
+            } catch {
+              // Ignore transient metadata seek edge case
             }
           }}
           onLoadedData={() => setVideoReady(true)}
@@ -181,24 +228,24 @@ export function ScrubbedVideoCanvas({
           onSeeked={() => {
             const vid = videoRef.current;
             if (!vid || vid.readyState < 1) return;
-            if (Math.abs(vid.currentTime - desiredTimeRef.current) > 0.008) {
+            const targetFrame = desiredFrameRef.current;
+            if (targetFrame !== lastRequestedFrameRef.current) {
+              lastRequestedFrameRef.current = targetFrame;
               try {
-                vid.currentTime = desiredTimeRef.current;
+                vid.currentTime = (targetFrame + 0.25) / CINEMA_TIERS.fps;
               } catch {
                 // Ignore transient seek errors
               }
             }
           }}
-          className={`absolute inset-0 w-full h-full object-cover brightness-[1.06] contrast-[1.03] transition-opacity duration-500 pointer-events-none ${
+          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-500 pointer-events-none ${
             videoReady ? 'opacity-100' : 'opacity-0'
           }`}
-          style={{
-            willChange: 'transform',
-          }}
+          style={{ willChange: 'transform' }}
         />
       )}
 
-      {/* Measured Scrim keeping brightness alive while preserving editorial typography legibility */}
+      {/* Cheap Static Gradient Overlays Only (zero backdrop-filter, zero SVG turbulence) */}
       <div
         className="absolute inset-0 pointer-events-none"
         style={{
@@ -207,7 +254,6 @@ export function ScrubbedVideoCanvas({
         }}
       />
       <div className="absolute inset-0 bg-gradient-to-b from-[#07060B]/55 via-transparent to-[#07060B]/75 pointer-events-none" />
-      <div className="absolute inset-0 film-grain opacity-65 pointer-events-none" />
     </div>
   );
 }
