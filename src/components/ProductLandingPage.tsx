@@ -373,7 +373,7 @@ export function ProductLandingPage({
       </section>
 
       {/* Mobile Sticky Bottom Buy Bar */}
-      <div className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-[#07060B]/95 backdrop-blur-xl border-t border-[#F3F1EC]/15 px-4 py-3 flex items-center gap-3">
+      <div className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-[#07060B]/95 backdrop-blur-xl border-t border-[#F3F1EC]/15 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] flex items-center gap-3">
         <div className="inline-flex items-center border border-[#F3F1EC]/20 bg-[#110F18] h-11">
           <button
             type="button"

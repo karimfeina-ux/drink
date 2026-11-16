@@ -197,6 +197,7 @@ export function ScrubbedVideoCanvas({
 
     const cleanup = () => {
       window.removeEventListener('touchstart', unlock);
+      window.removeEventListener('touchend', unlock);
       window.removeEventListener('pointerdown', unlock);
       window.removeEventListener('keydown', unlock);
     };
@@ -209,12 +210,11 @@ export function ScrubbedVideoCanvas({
       const vid = videoRef.current;
       if (!vid) return;
 
-      unlockedRef.current = true;
-      cleanup();
-
       vid
         .play()
         .then(() => {
+          unlockedRef.current = true;
+          cleanup();
           vid.pause();
           const mapped = Math.min(1, Math.max(0, scrollProgressRef.current) / 0.76);
           const { fps, totalFrames } = CINEMA_TIERS;
@@ -229,11 +229,12 @@ export function ScrubbedVideoCanvas({
           }
         })
         .catch(() => {
-          // Browsers blocking silent play() still allow currentTime seeking
+          // Keep listeners active so next touch/click unlocks once media is ready
         });
     };
 
     window.addEventListener('touchstart', unlock, { passive: true });
+    window.addEventListener('touchend', unlock, { passive: true });
     window.addEventListener('pointerdown', unlock, { passive: true });
     window.addEventListener('keydown', unlock, { passive: true });
 
@@ -372,7 +373,7 @@ export function ScrubbedVideoCanvas({
   return (
     <div
       ref={backdropRef}
-      className="fixed inset-0 z-0 overflow-hidden bg-[#07060B]"
+      className="fixed top-0 left-0 w-full h-screen h-[100lvh] z-0 overflow-hidden bg-[#07060B] pointer-events-none transform-gpu"
       aria-hidden="true"
     >
       {/* Immediate Poster Layer — unmounted after video fades in */}

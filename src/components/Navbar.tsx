@@ -37,7 +37,7 @@ export function Navbar({
   };
 
   return (
-    <header className="fixed top-0 inset-x-0 z-40 transition-colors duration-300 bg-gradient-to-b from-[#07060B]/92 via-[#07060B]/55 to-transparent">
+    <header className="fixed top-0 inset-x-0 z-40 pt-[env(safe-area-inset-top)] transition-colors duration-300 bg-gradient-to-b from-[#07060B]/92 via-[#07060B]/55 to-transparent">
       <div className="max-w-[1440px] mx-auto px-5 sm:px-8 h-16 flex items-center justify-between gap-8">
         {/* Zone 1: Single text wordmark */}
         <a

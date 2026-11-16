@@ -82,9 +82,9 @@ export function CartDrawer({
         animate={{ x: 0 }}
         exit={{ x: '100%' }}
         transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-        className="relative z-10 w-full max-w-md bg-[#0D0B13] border-l border-[#F3F1EC]/15 h-full flex flex-col"
+        className="relative z-10 w-full max-w-md bg-[#0D0B13] border-l border-[#F3F1EC]/15 h-full h-[100dvh] flex flex-col"
       >
-        <div className="px-6 py-5 border-b border-[#F3F1EC]/10 flex items-center justify-between">
+        <div className="px-6 pt-[max(1.25rem,env(safe-area-inset-top))] pb-5 border-b border-[#F3F1EC]/10 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <ShoppingBag className="w-4 h-4 text-[#D9A441]" aria-hidden="true" />
             <h2 className="font-display text-2xl font-medium text-[#F3F1EC]">
@@ -279,7 +279,7 @@ export function CartDrawer({
 
         {/* Footer Totals */}
         {items.length > 0 && step !== 'confirmed' && (
-          <div className="p-6 border-t border-[#F3F1EC]/10 bg-[#0A0810] space-y-4">
+          <div className="px-6 pt-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] border-t border-[#F3F1EC]/10 bg-[#0A0810] space-y-4">
             <div className="space-y-1.5 text-sm">
               <div className="flex justify-between text-[#9A96A6]">
                 <span>Subtotal</span>

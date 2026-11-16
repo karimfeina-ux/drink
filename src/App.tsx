@@ -81,13 +81,6 @@ export default function App() {
       document.documentElement.scrollHeight - window.innerHeight
     );
 
-    const recomputeBounds = () => {
-      maxScroll = Math.max(
-        1,
-        document.documentElement.scrollHeight - window.innerHeight
-      );
-    };
-
     const syncScrollMetrics = () => {
       const nextProgress = Math.max(0, Math.min(1, window.scrollY / maxScroll));
       scrollProgressRef.current = nextProgress;
@@ -110,6 +103,14 @@ export default function App() {
           setSelectedElixir(featured);
         }
       }
+    };
+
+    const recomputeBounds = () => {
+      maxScroll = Math.max(
+        1,
+        document.documentElement.scrollHeight - window.innerHeight
+      );
+      syncScrollMetrics();
     };
 
     syncScrollMetrics();
