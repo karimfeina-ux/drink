@@ -9,6 +9,12 @@ interface ScrubbedVideoCanvasProps {
   reducedMotion: boolean;
 }
 
+interface NavigatorWithConnection extends Navigator {
+  connection?: {
+    saveData?: boolean;
+  };
+}
+
 type TierKey = 'desktop' | 'mobile';
 
 export interface VideoDiagnosticsSnapshot {
@@ -53,6 +59,11 @@ function selectTierKey(): TierKey {
   return isPortrait ? 'mobile' : 'desktop';
 }
 
+function isSaveDataEnabled(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return Boolean((navigator as NavigatorWithConnection).connection?.saveData);
+}
+
 function isDiagOverlayRequested(): boolean {
   if (!import.meta.env.DEV || typeof window === 'undefined') return false;
   const params = new URLSearchParams(window.location.search);
@@ -70,24 +81,10 @@ function getBufferedPercent(vid: HTMLVideoElement): number {
   return Math.min(100, Math.round((totalBuffered / vid.duration) * 100));
 }
 
-const INTRO_START_SEC = 1.0;
-const INTRO_END_SEC = 2.0;
-const INTRO_END_FRAME = Math.round(INTRO_END_SEC * CINEMA_TIERS.fps);
-
-function mapProgressToFrame(mappedProgress: number): number {
-  const { totalFrames } = CINEMA_TIERS;
-  const maxFrame = totalFrames - 1;
-  return Math.max(
-    INTRO_END_FRAME,
-    Math.min(maxFrame, Math.round(INTRO_END_FRAME + mappedProgress * (maxFrame - INTRO_END_FRAME)))
-  );
-}
-
 /**
  * Full-viewport scrubbed video backdrop:
  * - Responsive orientation-matched tier: mobile portrait (1080x1920) vs desktop landscape (3840x2160 4K)
  * - Direct HTTP Range streaming (moov-first MP4, preload="auto", zero blocking fetch().blob())
- * - Plays brief opening emergence (1.0s -> 2.0s) on entry so iOS/Android hardware decoders unlock immediately
  * - Pure 1:1 native hardware video plane: zero CSS transforms, zero filters, zero darkening overlays
  * - Zero forced layout reads in rAF (IntersectionObserver occlusion + ResizeObserver dimensions)
  */
@@ -97,11 +94,12 @@ export function ScrubbedVideoCanvas({
   reducedMotion,
 }: ScrubbedVideoCanvasProps) {
   const [tierKey, setTierKey] = useState<TierKey>(selectTierKey);
+  const [saveData] = useState(isSaveDataEnabled);
   const [showDiagHud, setShowDiagHud] = useState(isDiagOverlayRequested);
   const [diagSnapshot, setDiagSnapshot] = useState<VideoDiagnosticsSnapshot | null>(null);
 
   const tier = CINEMA_TIERS[tierKey];
-  const posterOnly = reducedMotion;
+  const posterOnly = reducedMotion || saveData;
 
   const backdropRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -109,9 +107,10 @@ export function ScrubbedVideoCanvas({
 
   const smoothedScrubRef = useRef(0);
   const lastRequestedFrameRef = useRef(-1);
-  const desiredFrameRef = useRef(INTRO_END_FRAME);
+  const desiredFrameRef = useRef(0);
+  const ambientPlayingRef = useRef(true);
+  const autoplayBlockedRef = useRef(false);
   const unlockedRef = useRef(false);
-  const introDoneRef = useRef(false);
   const occludedRef = useRef(false);
   const catalogCoversTopRef = useRef(false);
 
@@ -137,6 +136,8 @@ export function ScrubbedVideoCanvas({
         setPosterDismissed(false);
         setVideoFailed(false);
         lastRequestedFrameRef.current = -1;
+        ambientPlayingRef.current = scrollProgressRef.current <= 0.008;
+        autoplayBlockedRef.current = false;
         return next;
       });
     };
@@ -193,26 +194,10 @@ export function ScrubbedVideoCanvas({
     return () => window.clearTimeout(timer);
   }, [videoReady, posterDismissed]);
 
-  // Ensure inline muted attributes on DOM node + reliable gesture fallback for iOS Low Power Mode
+  // Reliable iOS Safari silent playback unlock once <video> is mounted
   useEffect(() => {
     if (posterOnly || videoFailed) return;
     unlockedRef.current = false;
-    introDoneRef.current = scrollProgressRef.current > 0.004;
-
-    const vid = videoRef.current;
-    if (vid) {
-      vid.muted = true;
-      vid.defaultMuted = true;
-      vid.playsInline = true;
-      vid.setAttribute('playsinline', '');
-      vid.setAttribute('webkit-playsinline', 'true');
-      vid.setAttribute('x5-playsinline', 'true');
-      if (vid.paused && vid.readyState >= 1) {
-        vid.play().catch(() => {
-          // Will unlock on first touch/pointer gesture if OS blocked initial autoplay
-        });
-      }
-    }
 
     const cleanup = () => {
       window.removeEventListener('touchstart', unlock);
@@ -226,30 +211,33 @@ export function ScrubbedVideoCanvas({
         cleanup();
         return;
       }
-      const el = videoRef.current;
-      if (!el) return;
+      const vid = videoRef.current;
+      if (!vid) return;
 
-      el.muted = true;
-      el.defaultMuted = true;
-
-      el.play()
+      vid
+        .play()
         .then(() => {
           unlockedRef.current = true;
+          autoplayBlockedRef.current = false;
           cleanup();
-          setVideoReady(true);
-
+          const atTop = scrollProgressRef.current <= 0.008;
+          if (atTop) {
+            ambientPlayingRef.current = true;
+            setVideoReady(true);
+            return;
+          }
+          ambientPlayingRef.current = false;
+          vid.pause();
           const mapped = Math.min(1, Math.max(0, scrollProgressRef.current) / 0.76);
-          if (scrollProgressRef.current > 0.004 || introDoneRef.current) {
-            introDoneRef.current = true;
-            el.pause();
-            const frame = mapProgressToFrame(mapped);
-            lastRequestedFrameRef.current = frame;
-            desiredFrameRef.current = frame;
-            if (el.readyState >= 1) {
-              el.currentTime = (frame + 0.25) / CINEMA_TIERS.fps;
-            }
-          } else if (el.currentTime < INTRO_START_SEC) {
-            el.currentTime = INTRO_START_SEC;
+          const { fps, totalFrames } = CINEMA_TIERS;
+          const frame = Math.max(
+            0,
+            Math.min(totalFrames - 1, Math.round(mapped * (totalFrames - 1)))
+          );
+          lastRequestedFrameRef.current = frame;
+          desiredFrameRef.current = frame;
+          if (vid.readyState >= 1) {
+            vid.currentTime = (frame + 0.25) / fps;
           }
         })
         .catch(() => {
@@ -272,7 +260,7 @@ export function ScrubbedVideoCanvas({
       return;
     }
 
-    const { fps } = CINEMA_TIERS;
+    const { fps, totalFrames } = CINEMA_TIERS;
 
     const publishDiagnostics = (now: number, vid: HTMLVideoElement | null, frame: number) => {
       if (!import.meta.env.DEV) return;
@@ -331,44 +319,73 @@ export function ScrubbedVideoCanvas({
         if (backdropRef.current) {
           backdropRef.current.style.visibility = isOccluded ? 'hidden' : 'visible';
         }
+        if (isOccluded && vid && !vid.paused) {
+          vid.pause();
+        }
       }
 
       if (isOccluded) {
-        if (vid && !vid.paused) vid.pause();
         publishDiagnostics(now, vid, lastRequestedFrameRef.current);
         return;
       }
 
-      // Let the opening obsidian emergence play on page enter until 2.0s or first scroll
-      if (!introDoneRef.current) {
-        if (clampedProgress > 0.004) {
-          introDoneRef.current = true;
-          if (vid && !vid.paused) vid.pause();
-        } else {
-          if (vid && vid.currentTime >= INTRO_END_SEC) {
-            introDoneRef.current = true;
-            if (!vid.paused) vid.pause();
-            lastRequestedFrameRef.current = INTRO_END_FRAME;
-            desiredFrameRef.current = INTRO_END_FRAME;
-          }
-          publishDiagnostics(now, vid, INTRO_END_FRAME);
-          return;
+      // Ambient playback at page entry / top of site so background is immediately alive on mobile & PC
+      if (clampedProgress <= 0.008) {
+        if (!ambientPlayingRef.current) {
+          ambientPlayingRef.current = true;
+          lastRequestedFrameRef.current = -1;
         }
+        if (vid && vid.readyState >= 2 && vid.paused && !autoplayBlockedRef.current) {
+          vid.play().catch(() => {
+            autoplayBlockedRef.current = true;
+          });
+        }
+        if (vid && vid.duration && Number.isFinite(vid.duration)) {
+          const liveRatio = Math.max(0, Math.min(1, vid.currentTime / vid.duration));
+          smoothedScrubRef.current = liveRatio;
+          const liveFrame = Math.max(
+            0,
+            Math.min(totalFrames - 1, Math.round(liveRatio * (totalFrames - 1)))
+          );
+          publishDiagnostics(now, vid, liveFrame);
+        } else {
+          publishDiagnostics(now, vid, 0);
+        }
+        return;
+      }
+
+      // Smoothly transition from ambient hero playback into exact 24fps scroll scrubbing
+      if (ambientPlayingRef.current) {
+        ambientPlayingRef.current = false;
+        if (vid && !vid.paused) {
+          vid.pause();
+        }
+        if (vid && vid.duration && Number.isFinite(vid.duration)) {
+          smoothedScrubRef.current = Math.max(
+            0,
+            Math.min(1, vid.currentTime / vid.duration)
+          );
+        } else {
+          smoothedScrubRef.current = mappedVideoProgress;
+        }
+        lastRequestedFrameRef.current = -1;
       }
 
       const delta = mappedVideoProgress - smoothedScrubRef.current;
-      if (Math.abs(delta) > 0.04) {
-        const k = 1 - Math.exp(-dt * 40);
+      if (Math.abs(delta) > 0.03) {
+        const k = 1 - Math.exp(-dt * 36);
         smoothedScrubRef.current += delta * k;
       } else if (delta !== 0) {
         smoothedScrubRef.current = mappedVideoProgress;
       }
 
-      const frame = mapProgressToFrame(smoothedScrubRef.current);
+      const frame = Math.max(
+        0,
+        Math.min(totalFrames - 1, Math.round(smoothedScrubRef.current * (totalFrames - 1)))
+      );
       desiredFrameRef.current = frame;
 
       if (vid && vid.readyState >= 1 && frame !== lastRequestedFrameRef.current) {
-        if (!vid.paused) vid.pause();
         if (!vid.seeking) {
           lastRequestedFrameRef.current = frame;
           seekStartedAtRef.current = performance.now();
@@ -437,87 +454,51 @@ export function ScrubbedVideoCanvas({
           autoPlay
           muted
           playsInline
+          loop
           preload="auto"
           disablePictureInPicture
           disableRemotePlayback
-          onLoadedMetadata={(e) => {
-            const vid = e.currentTarget;
-            vid.muted = true;
-            vid.defaultMuted = true;
-            if (scrollProgressRef.current <= 0.004 && !introDoneRef.current) {
-              if (vid.currentTime < INTRO_START_SEC) {
-                try {
-                  vid.currentTime = INTRO_START_SEC;
-                } catch {
-                  // Ignore if metadata seek not ready yet
-                }
-              }
-            } else {
-              introDoneRef.current = true;
-              const mapped = Math.min(1, Math.max(0, scrollProgressRef.current) / 0.76);
-              const frame = mapProgressToFrame(mapped);
-              smoothedScrubRef.current = mapped;
-              desiredFrameRef.current = frame;
-              lastRequestedFrameRef.current = frame;
-              try {
-                vid.currentTime = (frame + 0.25) / CINEMA_TIERS.fps;
-              } catch {
-                // Ignore if metadata seek not ready yet
-              }
-            }
-          }}
-          onLoadedData={(e) => {
-            const vid = e.currentTarget;
-            if (scrollProgressRef.current <= 0.004 && !introDoneRef.current) {
-              if (vid.currentTime < INTRO_START_SEC) {
-                try {
-                  vid.currentTime = INTRO_START_SEC;
-                } catch {
-                  // Ignore if initial seek is pending
-                }
-              }
-              if (vid.paused) {
-                vid.play().catch(() => {
-                  // Fallback: jump cleanly to settled hero frame if autoplay is blocked by OS Low Power Mode
-                  introDoneRef.current = true;
-                  try {
-                    vid.currentTime = (INTRO_END_FRAME + 0.25) / CINEMA_TIERS.fps;
-                  } catch {
-                    setVideoReady(true);
-                  }
-                });
-              }
-              setVideoReady(true);
-              return;
-            }
-            introDoneRef.current = true;
-            if (!vid.paused) vid.pause();
-            const mapped = Math.min(1, Math.max(0, scrollProgressRef.current) / 0.76);
-            const frame = mapProgressToFrame(mapped);
-            smoothedScrubRef.current = mapped;
-            desiredFrameRef.current = frame;
-            lastRequestedFrameRef.current = frame;
-            try {
-              vid.currentTime = (frame + 0.25) / CINEMA_TIERS.fps;
-            } catch {
-              setVideoReady(true);
-            }
-          }}
-          onTimeUpdate={(e) => {
-            const vid = e.currentTarget;
-            if (!introDoneRef.current && vid.currentTime >= INTRO_END_SEC) {
-              introDoneRef.current = true;
-              if (!vid.paused) vid.pause();
-              lastRequestedFrameRef.current = INTRO_END_FRAME;
-              desiredFrameRef.current = INTRO_END_FRAME;
-            }
-          }}
           onPlaying={() => {
             unlockedRef.current = true;
             setVideoReady(true);
           }}
+          onLoadedData={(e) => {
+            const vid = e.currentTarget;
+            if (scrollProgressRef.current <= 0.008) {
+              ambientPlayingRef.current = true;
+              setVideoReady(true);
+              if (vid.paused) {
+                vid.play().catch(() => {});
+              }
+              return;
+            }
+            ambientPlayingRef.current = false;
+            vid.pause();
+            const mapped = Math.min(1, Math.max(0, scrollProgressRef.current) / 0.76);
+            const { fps, totalFrames } = CINEMA_TIERS;
+            const frame = Math.max(
+              0,
+              Math.min(totalFrames - 1, Math.round(mapped * (totalFrames - 1)))
+            );
+            smoothedScrubRef.current = mapped;
+            desiredFrameRef.current = frame;
+            lastRequestedFrameRef.current = frame;
+            if (frame > 0) {
+              try {
+                vid.currentTime = (frame + 0.25) / fps;
+              } catch {
+                setVideoReady(true);
+              }
+            } else {
+              setVideoReady(true);
+            }
+          }}
           onCanPlay={(e) => {
-            if (!e.currentTarget.seeking) {
+            const vid = e.currentTarget;
+            if (scrollProgressRef.current <= 0.008 && vid.paused) {
+              vid.play().catch(() => {});
+            }
+            if (!vid.seeking) {
               setVideoReady(true);
             }
           }}
@@ -532,7 +513,7 @@ export function ScrubbedVideoCanvas({
               seekStartedAtRef.current = 0;
             }
             const vid = videoRef.current;
-            if (!vid || vid.readyState < 1 || !introDoneRef.current) return;
+            if (!vid || vid.readyState < 1) return;
             const targetFrame = desiredFrameRef.current;
             if (targetFrame !== lastRequestedFrameRef.current) {
               lastRequestedFrameRef.current = targetFrame;
