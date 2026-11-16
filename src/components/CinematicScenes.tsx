@@ -73,7 +73,7 @@ export function CinematicScenes({
             initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.9, delay: 0.08, ease: [0.16, 1, 0.3, 1] }}
-            className="font-display text-[clamp(3.3rem,9.2vw,8.4rem)] font-medium leading-[0.89] tracking-[-0.03em] text-[#F3F1EC] text-balance drop-shadow-[0_4px_32px_rgba(7,6,11,0.9)]"
+            className="font-display text-[clamp(3.3rem,9.2vw,8.4rem)] font-medium leading-[0.89] tracking-[-0.03em] text-[#F3F1EC] text-balance [text-shadow:0_4px_32px_rgba(7,6,11,0.9)]"
           >
             Cellular hydration,{' '}
             <span className="italic font-normal text-stroke-bone">sculpted</span> in mineral.
@@ -85,7 +85,7 @@ export function CinematicScenes({
             transition={{ duration: 0.85, delay: 0.2, ease: [0.16, 1, 0.3, 1] }}
             className="mt-8 flex flex-col sm:flex-row sm:items-end justify-between gap-8 max-w-4xl"
           >
-            <p className="max-w-sm text-sm sm:text-base text-[#F3F1EC]/85 leading-relaxed optical-light drop-shadow-[0_2px_16px_rgba(7,6,11,0.95)]">
+            <p className="max-w-sm text-sm sm:text-base text-[#F3F1EC]/85 leading-relaxed optical-light [text-shadow:0_2px_16px_rgba(7,6,11,0.95)]">
               Six small-batch mineral formulas in crisp spring carbonation. Scroll slowly through the two-part film to unveil every vessel and select your bottle.
             </p>
 
@@ -142,7 +142,7 @@ export function CinematicScenes({
           <motion.div
             initial={{ opacity: 0, y: 24 }}
             whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: false, amount: 0.35 }}
+            viewport={{ once: true, amount: 0.35 }}
             transition={{ duration: 0.75, ease: [0.16, 1, 0.3, 1] }}
             className="lg:col-span-5 pointer-events-auto relative"
           >
@@ -152,12 +152,12 @@ export function CinematicScenes({
             >
               01
             </span>
-            <h2 className="font-display text-4xl sm:text-6xl font-medium leading-[0.96] tracking-tight text-[#F3F1EC] text-balance drop-shadow-[0_4px_28px_rgba(7,6,11,0.95)]">
+            <h2 className="font-display text-4xl sm:text-6xl font-medium leading-[0.96] tracking-tight text-[#F3F1EC] text-balance [text-shadow:0_4px_28px_rgba(7,6,11,0.95)]">
               Water alone passes through.{' '}
               <span className="italic font-normal text-[#D9A441]">Minerals</span> lock in.
             </h2>
             <div className="mt-5 h-px w-20 bg-[#F3F1EC]/25" aria-hidden="true" />
-            <p className="text-sm sm:text-base text-[#F3F1EC]/85 leading-relaxed mt-5 max-w-md optical-light drop-shadow-[0_2px_18px_rgba(7,6,11,0.95)]">
+            <p className="text-sm sm:text-base text-[#F3F1EC]/85 leading-relaxed mt-5 max-w-md optical-light [text-shadow:0_2px_18px_rgba(7,6,11,0.95)]">
               Plain water lacks the osmotic pressure required for rapid cellular uptake. Each 355 ml vessel pairs Atlantic sea minerals, potassium citrate, and magnesium glycinate at blood-matched 280 mOsm/L—zero powder grit.
             </p>
           </motion.div>
@@ -195,7 +195,7 @@ export function CinematicScenes({
           <motion.div
             initial={{ opacity: 0, y: 24 }}
             whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: false, amount: 0.35 }}
+            viewport={{ once: true, amount: 0.35 }}
             transition={{ duration: 0.75, ease: [0.16, 1, 0.3, 1] }}
             className="lg:col-span-5 pointer-events-auto"
           >
@@ -205,7 +205,7 @@ export function CinematicScenes({
             >
               02
             </span>
-            <h2 className="font-display text-4xl sm:text-5xl font-medium leading-[0.98] tracking-tight text-[#F3F1EC] text-balance drop-shadow-[0_4px_28px_rgba(7,6,11,0.95)]">
+            <h2 className="font-display text-4xl sm:text-5xl font-medium leading-[0.98] tracking-tight text-[#F3F1EC] text-balance [text-shadow:0_4px_28px_rgba(7,6,11,0.95)]">
               Precision electrolyte geometry.
             </h2>
 
@@ -246,9 +246,9 @@ export function CinematicScenes({
         <motion.p
           initial={{ opacity: 0, y: 16 }}
           whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: false, amount: 0.5 }}
+          viewport={{ once: true, amount: 0.5 }}
           transition={{ duration: 0.7 }}
-          className="font-display italic text-2xl sm:text-4xl text-[#F3F1EC]/85 max-w-lg drop-shadow-[0_4px_24px_rgba(7,6,11,0.95)]"
+          className="font-display italic text-2xl sm:text-4xl text-[#F3F1EC]/85 max-w-lg [text-shadow:0_4px_24px_rgba(7,6,11,0.95)]"
         >
           Cold-extracted botanicals, zero synthetic color, bottled in embossed aluminum.
         </motion.p>
@@ -263,7 +263,7 @@ export function CinematicScenes({
           <motion.div
             initial={{ opacity: 0, y: 24 }}
             whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: false, amount: 0.35 }}
+            viewport={{ once: true, amount: 0.35 }}
             transition={{ duration: 0.75, ease: [0.16, 1, 0.3, 1] }}
             className="lg:col-span-5 pointer-events-auto"
           >
@@ -273,7 +273,7 @@ export function CinematicScenes({
             >
               03
             </span>
-            <h2 className="font-display text-4xl sm:text-5xl font-medium leading-[0.98] tracking-tight text-[#F3F1EC] text-balance drop-shadow-[0_4px_28px_rgba(7,6,11,0.95)]">
+            <h2 className="font-display text-4xl sm:text-5xl font-medium leading-[0.98] tracking-tight text-[#F3F1EC] text-balance [text-shadow:0_4px_28px_rgba(7,6,11,0.95)]">
               Botanical <span className="italic font-normal text-[#D9A441]">alchemy</span> in every crest.
             </h2>
 
@@ -319,7 +319,7 @@ export function CinematicScenes({
           <motion.div
             initial={{ opacity: 0, y: 24 }}
             whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: false, amount: 0.35 }}
+            viewport={{ once: true, amount: 0.35 }}
             transition={{ duration: 0.75, ease: [0.16, 1, 0.3, 1] }}
             className="lg:col-span-6 pointer-events-auto"
           >
@@ -329,7 +329,7 @@ export function CinematicScenes({
             >
               04
             </span>
-            <h2 className="font-display text-4xl sm:text-5xl font-medium leading-[0.98] tracking-tight text-[#F3F1EC] text-balance drop-shadow-[0_4px_28px_rgba(7,6,11,0.95)]">
+            <h2 className="font-display text-4xl sm:text-5xl font-medium leading-[0.98] tracking-tight text-[#F3F1EC] text-balance [text-shadow:0_4px_28px_rgba(7,6,11,0.95)]">
               Timed to a twenty-four hour rhythm.
             </h2>
 
@@ -380,17 +380,17 @@ export function CinematicScenes({
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           whileInView={{ opacity: 1, y: 0 }}
-          viewport={{ once: false, amount: 0.35 }}
+          viewport={{ once: true, amount: 0.35 }}
           transition={{ duration: 0.75, ease: [0.16, 1, 0.3, 1] }}
           className="max-w-2xl"
         >
           <p className="font-mono text-xs uppercase tracking-[0.16em] text-[#D9A441]">
             05 · Choose Your Vessel
           </p>
-          <h2 className="font-display text-4xl sm:text-6xl font-medium tracking-tight text-[#F3F1EC] mt-2 text-balance drop-shadow-[0_4px_28px_rgba(7,6,11,0.95)]">
+          <h2 className="font-display text-4xl sm:text-6xl font-medium tracking-tight text-[#F3F1EC] mt-2 text-balance [text-shadow:0_4px_28px_rgba(7,6,11,0.95)]">
             Every vessel in the frame is live.
           </h2>
-          <p className="text-sm text-[#F3F1EC]/80 mt-3 max-w-md drop-shadow-[0_2px_16px_rgba(7,6,11,0.95)]">
+          <p className="text-sm text-[#F3F1EC]/80 mt-3 max-w-md [text-shadow:0_2px_16px_rgba(7,6,11,0.95)]">
             Pick any bottle from the selector bar below to preview it or jump directly to its dedicated product landing page.
           </p>
         </motion.div>

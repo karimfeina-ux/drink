@@ -39,6 +39,11 @@ export default function App() {
   const lastWindowIdRef = useRef(ELIXIRS[4].id);
   const lenisRef = useRef<Lenis | null>(null);
   const savedScrollYRef = useRef(0);
+  const hasManualSelectionRef = useRef(false);
+
+  useEffect(() => {
+    hasManualSelectionRef.current = hasManualSelection;
+  }, [hasManualSelection]);
 
   // Sync browser hash navigation (#/product/:id <-> cinema film)
   useEffect(() => {
@@ -98,7 +103,7 @@ export default function App() {
       const shouldShowDock = nextProgress >= 0.62;
       setDockReady((prev) => (prev === shouldShowDock ? prev : shouldShowDock));
 
-      if (!hasManualSelection) {
+      if (!hasManualSelectionRef.current) {
         const featured = getActiveFeaturedElixir(nextProgress);
         if (featured.id !== lastWindowIdRef.current) {
           lastWindowIdRef.current = featured.id;
@@ -109,10 +114,17 @@ export default function App() {
 
     syncScrollMetrics();
 
+    const resizeObserver =
+      typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(recomputeBounds)
+        : null;
+    resizeObserver?.observe(document.body);
+
     if (reducedMotion) {
       window.addEventListener('scroll', syncScrollMetrics, { passive: true });
       window.addEventListener('resize', recomputeBounds, { passive: true });
       return () => {
+        resizeObserver?.disconnect();
         window.removeEventListener('scroll', syncScrollMetrics);
         window.removeEventListener('resize', recomputeBounds);
       };
@@ -167,12 +179,13 @@ export default function App() {
 
     return () => {
       if (rafId) cancelAnimationFrame(rafId);
+      resizeObserver?.disconnect();
       document.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('resize', recomputeBounds);
       lenis.destroy();
       lenisRef.current = null;
     };
-  }, [reducedMotion, hasManualSelection, routedProduct]);
+  }, [reducedMotion, routedProduct]);
 
   useEffect(() => {
     if (cartOpen) {

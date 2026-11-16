@@ -15,197 +15,390 @@ interface NavigatorWithConnection extends Navigator {
   };
 }
 
-function selectInitialTier() {
-  if (typeof window === 'undefined') return CINEMA_TIERS.desktop;
+type TierKey = 'desktop' | 'mobile';
+
+export interface VideoDiagnosticsSnapshot {
+  tier: TierKey;
+  src: string;
+  poster: string;
+  decodedWidth: number;
+  decodedHeight: number;
+  containerWidth: number;
+  containerHeight: number;
+  dpr: number;
+  scaleVsSourceX: number;
+  scaleVsSourceY: number;
+  readyState: number;
+  networkState: number;
+  bufferedPct: number;
+  paused: boolean;
+  seeking: boolean;
+  playingVideoCount: number;
+  totalVideoElements: number;
+  currentFrame: number;
+  lastSeekLatencyMs: number;
+  avgSeekLatencyMs: number;
+  seeksIssued: number;
+  seeksSkippedBusy: number;
+  occludedByCatalog: boolean;
+  iosUnlocked: boolean;
+  posterDismissed: boolean;
+}
+
+declare global {
+  interface Window {
+    __AETHERIA_VIDEO_DIAG__?: VideoDiagnosticsSnapshot;
+  }
+}
+
+function selectTierKey(): TierKey {
+  if (typeof window === 'undefined') return 'desktop';
   const isPortrait =
     window.matchMedia('(orientation: portrait)').matches ||
     window.innerHeight > window.innerWidth;
-  const isCoarseSmall =
-    window.matchMedia('(pointer: coarse)').matches && window.innerWidth <= 900;
-  return isPortrait || isCoarseSmall ? CINEMA_TIERS.mobile : CINEMA_TIERS.desktop;
+  return isPortrait ? 'mobile' : 'desktop';
 }
 
-function isSaveDataEnabled() {
+function isSaveDataEnabled(): boolean {
   if (typeof navigator === 'undefined') return false;
   return Boolean((navigator as NavigatorWithConnection).connection?.saveData);
 }
 
+function isDiagOverlayRequested(): boolean {
+  if (!import.meta.env.DEV || typeof window === 'undefined') return false;
+  const params = new URLSearchParams(window.location.search);
+  return params.get('debug') === 'video' || params.get('diag') === '1';
+}
+
+function getBufferedPercent(vid: HTMLVideoElement): number {
+  if (!vid.duration || !Number.isFinite(vid.duration) || vid.buffered.length === 0) {
+    return 0;
+  }
+  let totalBuffered = 0;
+  for (let i = 0; i < vid.buffered.length; i++) {
+    totalBuffered += vid.buffered.end(i) - vid.buffered.start(i);
+  }
+  return Math.min(100, Math.round((totalBuffered / vid.duration) * 100));
+}
+
 /**
  * Full-viewport scrubbed video backdrop:
- * - Picks mobile portrait (1080x1920) or desktop QHD (2560x1440) tier strictly once on mount
- * - Honors Save-Data & prefers-reduced-motion (poster only, zero video download)
- * - Preloads All-Intra MP4 into an in-memory Blob URL with fallback & full cleanup
- * - Driven by the single unified rAF loop via videoTickRef with dt-normalized smoothing
- *   and exact frame quantization ((frame + 0.25) / fps)
+ * - Responsive orientation-matched tier: mobile portrait (1080x1920) vs desktop landscape (3840x2160 4K)
+ * - Direct HTTP Range streaming (moov-first MP4, preload="auto", zero blocking fetch().blob())
+ * - Pure 1:1 native hardware video plane: zero CSS transforms, zero filters, zero darkening overlays
+ * - Zero forced layout reads in rAF (IntersectionObserver occlusion + ResizeObserver dimensions)
  */
 export function ScrubbedVideoCanvas({
   scrollProgressRef,
   videoTickRef,
   reducedMotion,
 }: ScrubbedVideoCanvasProps) {
-  const [tier] = useState(selectInitialTier);
+  const [tierKey, setTierKey] = useState<TierKey>(selectTierKey);
   const [saveData] = useState(isSaveDataEnabled);
+  const [showDiagHud, setShowDiagHud] = useState(isDiagOverlayRequested);
+  const [diagSnapshot, setDiagSnapshot] = useState<VideoDiagnosticsSnapshot | null>(null);
+
+  const tier = CINEMA_TIERS[tierKey];
   const posterOnly = reducedMotion || saveData;
 
+  const backdropRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const posterRef = useRef<HTMLImageElement | null>(null);
+  const containerSizeRef = useRef({ width: 0, height: 0 });
 
   const smoothedScrubRef = useRef(0);
   const lastRequestedFrameRef = useRef(-1);
   const desiredFrameRef = useRef(0);
-  const lastTransformRef = useRef('');
   const unlockedRef = useRef(false);
+  const occludedRef = useRef(false);
+  const catalogCoversTopRef = useRef(false);
 
-  const [blobSrc, setBlobSrc] = useState<string | null>(null);
+  const seekStartedAtRef = useRef(0);
+  const seekCountRef = useRef(0);
+  const totalSeekLatencyRef = useRef(0);
+  const lastSeekLatencyRef = useRef(0);
+  const skippedBusyRef = useRef(0);
+  const lastDiagPublishRef = useRef(0);
+
   const [videoReady, setVideoReady] = useState(false);
+  const [posterDismissed, setPosterDismissed] = useState(false);
   const [videoFailed, setVideoFailed] = useState(false);
 
-  // Preload active video tier once into an in-memory Blob URL for zero-network scrubbing
+  // Switch tier cleanly only when viewport orientation flips (portrait <-> landscape)
   useEffect(() => {
-    if (posterOnly) {
-      setBlobSrc(null);
-      return;
-    }
-
-    const controller = new AbortController();
-    let objectUrl: string | null = null;
-
-    fetch(tier.src, { signal: controller.signal })
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.blob();
-      })
-      .then((blob) => {
-        objectUrl = URL.createObjectURL(blob);
-        setBlobSrc(objectUrl);
-      })
-      .catch((err) => {
-        if (err?.name !== 'AbortError') {
-          setBlobSrc(tier.src);
-        }
+    const mq = window.matchMedia('(orientation: portrait)');
+    const syncTier = () => {
+      const next = selectTierKey();
+      setTierKey((prev) => {
+        if (prev === next) return prev;
+        setVideoReady(false);
+        setPosterDismissed(false);
+        setVideoFailed(false);
+        lastRequestedFrameRef.current = -1;
+        return next;
       });
-
-    return () => {
-      controller.abort();
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl);
-      }
     };
-  }, [posterOnly, tier]);
 
-  // iOS Safari silent playback unlock on first user interaction
+    mq.addEventListener('change', syncTier);
+    window.addEventListener('resize', syncTier, { passive: true });
+    return () => {
+      mq.removeEventListener('change', syncTier);
+      window.removeEventListener('resize', syncTier);
+    };
+  }, []);
+
+  // Cache container dimensions via ResizeObserver (avoids per-frame getBoundingClientRect reflows)
   useEffect(() => {
-    if (posterOnly) return;
+    const el = backdropRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver((entries) => {
+      const rect = entries[0]?.contentRect;
+      if (rect) {
+        containerSizeRef.current = {
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+        };
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Observe #scene-collection off-main-thread to hide occluded video without rAF layout reads
+  useEffect(() => {
+    const catalogEl = document.getElementById('scene-collection');
+    if (!catalogEl || typeof IntersectionObserver === 'undefined') return;
+
+    const io = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        if (!entry) return;
+        catalogCoversTopRef.current =
+          entry.isIntersecting && entry.boundingClientRect.top <= 1;
+      },
+      { threshold: [0, 0.05, 0.25, 0.5, 0.99, 1] }
+    );
+    io.observe(catalogEl);
+    return () => io.disconnect();
+  }, []);
+
+  // Dismiss poster layer once video fade-in settles so GPU doesn't hold a second full-viewport bitmap
+  useEffect(() => {
+    if (!videoReady || posterDismissed) return;
+    const timer = window.setTimeout(() => {
+      setPosterDismissed(true);
+    }, 520);
+    return () => window.clearTimeout(timer);
+  }, [videoReady, posterDismissed]);
+
+  // Reliable iOS Safari silent playback unlock once <video> is mounted
+  useEffect(() => {
+    if (posterOnly || videoFailed) return;
+    unlockedRef.current = false;
+
+    const cleanup = () => {
+      window.removeEventListener('touchstart', unlock);
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+    };
+
     const unlock = () => {
-      if (unlockedRef.current) return;
+      if (unlockedRef.current) {
+        cleanup();
+        return;
+      }
       const vid = videoRef.current;
       if (!vid) return;
+
       unlockedRef.current = true;
+      cleanup();
+
       vid
         .play()
         .then(() => {
           vid.pause();
+          const mapped = Math.min(1, Math.max(0, scrollProgressRef.current) / 0.76);
+          const { fps, totalFrames } = CINEMA_TIERS;
+          const frame = Math.max(
+            0,
+            Math.min(totalFrames - 1, Math.round(mapped * (totalFrames - 1)))
+          );
+          lastRequestedFrameRef.current = frame;
+          desiredFrameRef.current = frame;
+          if (vid.readyState >= 1) {
+            vid.currentTime = (frame + 0.25) / fps;
+          }
         })
         .catch(() => {
           // Browsers blocking silent play() still allow currentTime seeking
         });
     };
 
-    window.addEventListener('touchstart', unlock, { once: true, passive: true });
-    window.addEventListener('pointerdown', unlock, { once: true, passive: true });
-    return () => {
-      window.removeEventListener('touchstart', unlock);
-      window.removeEventListener('pointerdown', unlock);
-    };
-  }, [posterOnly]);
+    window.addEventListener('touchstart', unlock, { passive: true });
+    window.addEventListener('pointerdown', unlock, { passive: true });
+    window.addEventListener('keydown', unlock, { passive: true });
 
-  // Register frame-quantized tick callback with App's single unified rAF loop
+    return cleanup;
+  }, [posterOnly, videoFailed, tier.src, scrollProgressRef]);
+
+  // Register frame-quantized tick callback with App's unified rAF loop
   useEffect(() => {
-    if (posterOnly || videoFailed || !blobSrc) {
+    if (posterOnly || videoFailed) {
       videoTickRef.current = null;
       return;
     }
 
     const { fps, totalFrames } = CINEMA_TIERS;
 
-    videoTickRef.current = (_now: number, dt: number) => {
+    const publishDiagnostics = (now: number, vid: HTMLVideoElement | null, frame: number) => {
+      if (!import.meta.env.DEV) return;
+      if (now - lastDiagPublishRef.current < 250) return;
+      lastDiagPublishRef.current = now;
+
+      const cw = containerSizeRef.current.width || window.innerWidth;
+      const ch = containerSizeRef.current.height || window.innerHeight;
+      const dw = vid?.videoWidth ?? 0;
+      const dh = vid?.videoHeight ?? 0;
+      const videos = document.querySelectorAll('video');
+      let playingCount = 0;
+      videos.forEach((v) => {
+        if (!v.paused && !v.ended) playingCount++;
+      });
+
+      const seeks = seekCountRef.current;
+      window.__AETHERIA_VIDEO_DIAG__ = {
+        tier: tierKey,
+        src: tier.src,
+        poster: tier.poster,
+        decodedWidth: dw,
+        decodedHeight: dh,
+        containerWidth: cw,
+        containerHeight: ch,
+        dpr: window.devicePixelRatio || 1,
+        scaleVsSourceX: dw > 0 ? Number((cw / dw).toFixed(2)) : 0,
+        scaleVsSourceY: dh > 0 ? Number((ch / dh).toFixed(2)) : 0,
+        readyState: vid?.readyState ?? 0,
+        networkState: vid?.networkState ?? 0,
+        bufferedPct: vid ? getBufferedPercent(vid) : 0,
+        paused: vid?.paused ?? true,
+        seeking: vid?.seeking ?? false,
+        playingVideoCount: playingCount,
+        totalVideoElements: videos.length,
+        currentFrame: frame,
+        lastSeekLatencyMs: Number(lastSeekLatencyRef.current.toFixed(1)),
+        avgSeekLatencyMs:
+          seeks > 0 ? Number((totalSeekLatencyRef.current / seeks).toFixed(1)) : 0,
+        seeksIssued: seeks,
+        seeksSkippedBusy: skippedBusyRef.current,
+        occludedByCatalog: occludedRef.current,
+        iosUnlocked: unlockedRef.current,
+        posterDismissed,
+      };
+    };
+
+    videoTickRef.current = (now: number, dt: number) => {
       const clampedProgress = Math.max(0, Math.min(1, scrollProgressRef.current));
       const mappedVideoProgress = Math.min(1, clampedProgress / 0.76);
 
-      // Frame-rate independent exponential smoothing (identical feel at 60/120/144 Hz)
-      const k = 1 - Math.exp(-dt * 30);
-      smoothedScrubRef.current += (mappedVideoProgress - smoothedScrubRef.current) * k;
-      if (Math.abs(mappedVideoProgress - smoothedScrubRef.current) < 0.00025) {
+      const isOccluded = clampedProgress >= 0.8 && catalogCoversTopRef.current;
+      if (occludedRef.current !== isOccluded) {
+        occludedRef.current = isOccluded;
+        if (backdropRef.current) {
+          backdropRef.current.style.visibility = isOccluded ? 'hidden' : 'visible';
+        }
+      }
+
+      if (isOccluded) {
+        publishDiagnostics(now, videoRef.current, lastRequestedFrameRef.current);
+        return;
+      }
+
+      const delta = mappedVideoProgress - smoothedScrubRef.current;
+      if (Math.abs(delta) > 0.04) {
+        const k = 1 - Math.exp(-dt * 40);
+        smoothedScrubRef.current += delta * k;
+      } else if (delta !== 0) {
         smoothedScrubRef.current = mappedVideoProgress;
       }
 
-      // Transform ends at exact scale(1) at final frame so video renders pixel-native
-      const rawScale = 1.03 - mappedVideoProgress * 0.03;
-      const nextTransform =
-        rawScale <= 1.0001
-          ? 'scale(1) translate3d(0, 0, 0)'
-          : `scale(${rawScale.toFixed(5)}) translate3d(0, 0, 0)`;
+      const frame = Math.max(
+        0,
+        Math.min(totalFrames - 1, Math.round(smoothedScrubRef.current * (totalFrames - 1)))
+      );
+      desiredFrameRef.current = frame;
 
       const vid = videoRef.current;
-      if (vid) {
-        if (lastTransformRef.current !== nextTransform) {
-          lastTransformRef.current = nextTransform;
-          vid.style.transform = nextTransform;
-        }
-
-        if (vid.readyState >= 1) {
-          const frame = Math.max(
-            0,
-            Math.min(totalFrames - 1, Math.round(smoothedScrubRef.current * (totalFrames - 1)))
-          );
-          desiredFrameRef.current = frame;
-
-          if (frame !== lastRequestedFrameRef.current && !vid.seeking) {
-            lastRequestedFrameRef.current = frame;
-            try {
-              vid.currentTime = (frame + 0.25) / fps;
-            } catch {
-              // Ignore transient seek state during initial decode
-            }
+      if (vid && vid.readyState >= 1 && frame !== lastRequestedFrameRef.current) {
+        if (!vid.seeking) {
+          lastRequestedFrameRef.current = frame;
+          seekStartedAtRef.current = performance.now();
+          try {
+            vid.currentTime = (frame + 0.25) / fps;
+          } catch {
+            // Ignore transient seek state during initial decode
           }
+        } else {
+          skippedBusyRef.current++;
         }
-      } else if (posterRef.current && lastTransformRef.current !== nextTransform) {
-        lastTransformRef.current = nextTransform;
-        posterRef.current.style.transform = nextTransform;
       }
+
+      publishDiagnostics(now, vid, frame);
     };
 
     return () => {
       videoTickRef.current = null;
     };
-  }, [posterOnly, videoFailed, blobSrc, scrollProgressRef, videoTickRef]);
+  }, [
+    posterOnly,
+    videoFailed,
+    tierKey,
+    tier.src,
+    tier.poster,
+    posterDismissed,
+    scrollProgressRef,
+    videoTickRef,
+  ]);
+
+  // Periodically refresh dev HUD only when explicitly enabled via ?debug=video or ?diag=1
+  useEffect(() => {
+    if (!showDiagHud) return;
+    const id = window.setInterval(() => {
+      if (window.__AETHERIA_VIDEO_DIAG__) {
+        setDiagSnapshot({ ...window.__AETHERIA_VIDEO_DIAG__ });
+      }
+    }, 250);
+    return () => window.clearInterval(id);
+  }, [showDiagHud]);
 
   return (
-    <div className="fixed inset-0 z-0 overflow-hidden bg-[#07060B]" aria-hidden="true">
-      {/* Immediate Poster Layer — zero CSS filters */}
-      <img
-        ref={posterRef}
-        src={tier.poster}
-        alt="Aetheria botanical electrolyte cans suspended in light"
-        fetchPriority="high"
-        loading="eager"
-        decoding="async"
-        className="absolute inset-0 w-full h-full object-cover"
-        style={{ willChange: 'transform' }}
-      />
+    <div
+      ref={backdropRef}
+      className="fixed inset-0 z-0 overflow-hidden bg-[#07060B]"
+      aria-hidden="true"
+    >
+      {/* Immediate Poster Layer — unmounted after video fades in */}
+      {!posterDismissed && (
+        <img
+          src={tier.poster}
+          alt="Aetheria botanical electrolyte cans suspended in light"
+          fetchPriority="high"
+          loading="eager"
+          decoding="async"
+          className="absolute inset-0 w-full h-full object-cover object-center"
+        />
+      )}
 
-      {/* All-Intra Scrubbed Tier Layer — fades cleanly over poster when ready */}
-      {!posterOnly && !videoFailed && blobSrc && (
+      {/* Direct-Streamed Short-GOP 4K/HD Video Layer — pure 1:1 native display scaling, zero overlays */}
+      {!posterOnly && !videoFailed && (
         <video
+          key={tier.src}
           ref={videoRef}
-          src={blobSrc}
-          poster={tier.poster}
+          src={tier.src}
           muted
           playsInline
           preload="auto"
           disablePictureInPicture
           disableRemotePlayback
-          onLoadedMetadata={(e) => {
+          onLoadedData={(e) => {
             const vid = e.currentTarget;
             const mapped = Math.min(1, Math.max(0, scrollProgressRef.current) / 0.76);
             const { fps, totalFrames } = CINEMA_TIERS;
@@ -216,21 +409,37 @@ export function ScrubbedVideoCanvas({
             smoothedScrubRef.current = mapped;
             desiredFrameRef.current = frame;
             lastRequestedFrameRef.current = frame;
-            try {
-              vid.currentTime = (frame + 0.25) / fps;
-            } catch {
-              // Ignore transient metadata seek edge case
+            if (frame > 0) {
+              try {
+                vid.currentTime = (frame + 0.25) / fps;
+              } catch {
+                setVideoReady(true);
+              }
+            } else {
+              setVideoReady(true);
             }
           }}
-          onLoadedData={() => setVideoReady(true)}
-          onCanPlay={() => setVideoReady(true)}
+          onCanPlay={(e) => {
+            if (!e.currentTarget.seeking) {
+              setVideoReady(true);
+            }
+          }}
           onError={() => setVideoFailed(true)}
           onSeeked={() => {
+            setVideoReady(true);
+            if (seekStartedAtRef.current > 0) {
+              const latency = performance.now() - seekStartedAtRef.current;
+              lastSeekLatencyRef.current = latency;
+              totalSeekLatencyRef.current += latency;
+              seekCountRef.current++;
+              seekStartedAtRef.current = 0;
+            }
             const vid = videoRef.current;
             if (!vid || vid.readyState < 1) return;
             const targetFrame = desiredFrameRef.current;
             if (targetFrame !== lastRequestedFrameRef.current) {
               lastRequestedFrameRef.current = targetFrame;
+              seekStartedAtRef.current = performance.now();
               try {
                 vid.currentTime = (targetFrame + 0.25) / CINEMA_TIERS.fps;
               } catch {
@@ -238,22 +447,51 @@ export function ScrubbedVideoCanvas({
               }
             }
           }}
-          className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-500 pointer-events-none ${
-            videoReady ? 'opacity-100' : 'opacity-0'
+          className={`absolute inset-0 w-full h-full object-cover object-center pointer-events-none ${
+            posterDismissed
+              ? 'opacity-100'
+              : `transition-opacity duration-500 ${videoReady ? 'opacity-100' : 'opacity-0'}`
           }`}
-          style={{ willChange: 'transform' }}
         />
       )}
 
-      {/* Cheap Static Gradient Overlays Only (zero backdrop-filter, zero SVG turbulence) */}
-      <div
-        className="absolute inset-0 pointer-events-none"
-        style={{
-          background:
-            'radial-gradient(ellipse at center, rgba(7,6,11,0.02) 0%, rgba(7,6,11,0.34) 70%, rgba(7,6,11,0.82) 100%)',
-        }}
-      />
-      <div className="absolute inset-0 bg-gradient-to-b from-[#07060B]/55 via-transparent to-[#07060B]/75 pointer-events-none" />
+      {/* Dev-Only Video Diagnostics HUD (?debug=video or ?diag=1) */}
+      {import.meta.env.DEV && showDiagHud && diagSnapshot && (
+        <aside className="fixed bottom-4 left-4 z-50 pointer-events-auto bg-[#07060B]/92 border border-[#D9A441]/45 px-3.5 py-2.5 text-[11px] font-mono text-[#F3F1EC] leading-relaxed max-w-xs">
+          <div className="flex items-center justify-between gap-4 border-b border-[#F3F1EC]/15 pb-1 mb-1.5">
+            <span className="text-[#D9A441] uppercase tracking-[0.12em]">Video Diag</span>
+            <button
+              type="button"
+              onClick={() => setShowDiagHud(false)}
+              className="text-[#9A96A6] hover:text-[#F3F1EC] cursor-pointer"
+            >
+              ×
+            </button>
+          </div>
+          <div>
+            Src: {diagSnapshot.tier} ({diagSnapshot.src.split('/').pop()})
+          </div>
+          <div>
+            Decoded: {diagSnapshot.decodedWidth}×{diagSnapshot.decodedHeight} | Box:{' '}
+            {diagSnapshot.containerWidth}×{diagSnapshot.containerHeight}@{diagSnapshot.dpr}x
+          </div>
+          <div>
+            Scale: {diagSnapshot.scaleVsSourceX}× / {diagSnapshot.scaleVsSourceY}×
+          </div>
+          <div>
+            State: r={diagSnapshot.readyState} n={diagSnapshot.networkState} buf=
+            {diagSnapshot.bufferedPct}%
+          </div>
+          <div>
+            Frame: {diagSnapshot.currentFrame}/479 | Seek: {diagSnapshot.lastSeekLatencyMs}ms
+            (avg {diagSnapshot.avgSeekLatencyMs}ms)
+          </div>
+          <div>
+            Playing: {diagSnapshot.playingVideoCount}/{diagSnapshot.totalVideoElements} |
+            Occluded: {String(diagSnapshot.occludedByCatalog)}
+          </div>
+        </aside>
+      )}
     </div>
   );
 }
